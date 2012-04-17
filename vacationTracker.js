@@ -1,0 +1,264 @@
+/*I have this in a spreadsheet hosted in a generic account like i-am-out@mydomain.com 
+    (so the calendar events are not created by me). This is also the email 
+    address that employees invite to their vacation events. Besides pasting in 
+    the code, you need to:
+
+    -From the generic account, create a new calendar to which the condensed list
+        will be posted and set the value of  destinationCalName below to its 
+        name. This is the calendar which everyone will overlay with their 
+        calendar. I just created another calendar from the generic account, you 
+        just need to make sure to show people how to find it. I sent the 
+        original sharing email (which had a link to click) and also embedded it 
+        on a site and told people to click the 'add calendar' button at the 
+        site. You could also give them the somewhat crazy address to paste into 
+        'add a coworker's calendar'.
+    -Update the other variables in the first block of code below. 
+    -If you want to remove the updating of the site, you can just comment out 
+        the call to updateInternalSite in the automateGoneDaily function.
+    
+    -set up triggers:
+        -automateGone / Time-driven / hour timer / every hour
+        -automateGoneDaily /Time-driven / day timer /(I have mine between 9-10a)
+
+*/
+
+
+/*
+Functions:
+ automateGone: creates/updates the next 7 days Who is Out events on calendar
+ automateGoneDaily: updates the website, creates/updates next 31 days Who is Out events on the calendar
+ whoIsOut
+
+Triggers:
+ automateGone: run hourly
+ automateGoneDaily: run once a day between 9 and 10am
+*/
+
+var sourceCalName = "my-calendar-email-address@mydomain.com"; //calendar which is invited to gone events
+var destinationCalName = "Sick and Vacation Calendar"; //calendar that people overlay to view who is out
+var siteUpdateNotify = "youraddress@mydomain.com"; //email this address when out list posted to google site
+var d = new Date();
+var timezone = "GMT-" + d.getTimezoneOffset()/60; //will be GMT-4 in spring, GMT-5 in fall
+var outpage = "https://sites.google.com/my-site-name/who-is-out/out/"; //the site to which the list is posted
+
+
+function automateGone()
+{
+	//this function will be called every hour to update the one event on the CIS Official calendar
+	var mydate = new Date(); 
+	mydate.setHours(0);
+	mydate.setMinutes(0);
+	mydate.setSeconds(0);
+	mydate.setDate(mydate.getDate()-1);
+
+	for(i=0; i<7; i++) 	 //update next 7 days
+	{
+		mydate.setDate(mydate.getDate() + 1); 
+
+		if(mydate.getDay() != 0 && mydate.getDay() != 6)	//not a weekend
+		{ 
+			var gonelistarray = whoIsOut(mydate);
+			//Logger.log(mydate + " " + gonelistarray);
+			createGoneEvent(gonelistarray , mydate);
+		}
+	}
+}
+
+function automateGoneDaily()
+{
+	//this function will be called once a day to update the one event on the CIS Official calendar
+	var mydate = new Date(); 
+	mydate.setHours(0);
+	mydate.setMinutes(0);
+	mydate.setSeconds(0);
+  
+	//update site - will only get updated if there isn't already a post for the date
+	var gonelistarray = whoIsOut(mydate); 
+	updateInternalSite(gonelistarray, mydate);
+	mydate.setDate(mydate.getDate()-1);
+	//update calendar for next 90 days
+	for(i=0; i<91; i++)
+	{
+		mydate.setDate(mydate.getDate() + 1);  
+		
+		if(mydate.getDay() != 0 && mydate.getDay() != 6)
+		{
+			var gonelistarray = whoIsOut(mydate);
+			createGoneEvent(gonelistarray , mydate);
+		}
+	}
+}
+
+function whoIsOut(thedate)
+{
+	var pplout = new Array();
+	var Calendar = CalendarApp.getCalendarsByName(sourceCalName)[0];
+	var events = Calendar.getEventsForDay(thedate);
+	// cycle through events and add info to pplout 
+	var eventLines = "";
+
+	for (var e in events) 
+	{
+		var event = events[e];
+		var duration = (event.getEndTime() - event.getStartTime())/86400000;
+			
+		if((thedate>=event.getStartTime())||duration<1) 	//weed out future all-day events mistakenly pulled by broken getEventsForDay function     
+		{ 
+
+			if(duration>1)	//multi-day event - delete one day from end time
+			{ 
+				var enddate = event.getEndTime();
+				enddate.setDate(enddate.getDate() - 1);  
+				var durdisplay =  Utilities.formatDate(event.getStartTime(), (event.isAllDayEvent() == true ? "GMT" : timezone), "M/d") + " - " + Utilities.formatDate(enddate, (event.isAllDayEvent() == true ? "GMT" : timezone), "M/d");
+			}
+			
+			else if(duration<1)  //part day
+			{
+				var durdisplay =  Utilities.formatDate(event.getStartTime(), (event.isAllDayEvent() == true ? "GMT" : timezone), "h:mm a") + " - " + Utilities.formatDate(event.getEndTime(), (event.isAllDayEvent() == true ? "GMT" : timezone),"h:mm a");
+			}
+			
+			else  //full day
+			{
+				var durdisplay = "full day"; 
+			}
+  
+			//the following will not be necessary because of the new event.getOriginalCalendarId() method
+			//but in case someone needs to report that someone else is out and doesn't have rights to their calendar, they can put their email address in the event description
+
+			var onbehalf = "";
+			//var regexemail = /^[a-zA-Z0-9._-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,4}$/;
+
+			var regexemail = /[a-zA-Z0-9._-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,4}/;
+
+			//Logger.log(event.getDescription() + " " + event.getDescription().search(regexemail));
+			
+			if(event.getDescription().search(regexemail)>-1) 	//workaround for inviting on behalf of - looks for email address in description
+			{ 
+				var descwordarray = event.getDescription().split(" ");
+
+				for (x in descwordarray)
+				{
+
+					if(descwordarray[x].search(regexemail)>-1)
+					{
+						onbehalf = descwordarray[x]; 
+					}
+				}
+			}
+			
+			var personemail = (onbehalf=="") ? event.getOriginalCalendarId() : onbehalf;
+			pplout.push(personemail.toLowerCase() + " " +  getEventType(event.getTitle()) + " " + durdisplay);
+		}
+	}
+	
+	pplout.sort();
+	return pplout;
+}
+
+function getEventType(thetitle)
+{
+	//keywords to decide whether to list person as sick, vacaction, conference, or just out (default)
+	eventType = "";
+	
+	if(thetitle.search(/sick|doctor|dr\.|dentist|medical/i)>-1)
+	{
+		eventType = "sick/doctor";
+	}
+	else if(thetitle.search(/vacation|vaca/i)>-1)
+	{
+		eventType = "vacation";   
+	}
+	else if(thetitle.search(/conference|training|seminar|session|meeting/i)>-1)
+	{
+		eventType = "conference/training";
+	}
+	else
+	{
+		eventType = "out";
+	}
+	return eventType;
+}
+
+function createGoneEvent(gonelistarray, thedate)
+{
+	//this function deletes existing 'who is out' event and adds updated one
+	if(gonelistarray.length==0)	//do not post if nobody is out
+	{
+		return false;
+	}
+	
+	gonelist = gonelistarray.join("\n");
+	thedate.setDate(thedate.getDate());
+	if(gonelist.length==0)
+	{
+		return false;
+	}
+
+	var official = CalendarApp.openByName(destinationCalName);
+	var events = official.getEventsForDay(thedate);
+  
+	for (var e in events) 
+	{
+		var event = events[e];
+		var startdate = Utilities.formatDate(event.getStartTime(),(event.isAllDayEvent() == true ? "GMT" : timezone),"M/d/yyyy");
+		var thedateshort = Utilities.formatDate(thedate,"GMT","M/d/yyyy");
+
+		if(event.getTitle()=="Who is Out" && (thedateshort>=startdate))	 //need to compare dates because of all day event bug
+		{
+			event.deleteEvent(); //delete existing event before recreating
+		}
+    }
+	
+	gonelist += "\nLast updated: " + Utilities.formatDate(new Date(), timezone, "EEEE M/d h:mm a");
+	var advancedArgs = {description:gonelist};
+	official.createAllDayEvent("Who is Out", thedate, advancedArgs);  
+}
+
+function triggerInternalSiteUpdate()
+{
+	var mydate = new Date();
+	mydate.setHours(0);
+	mydate.setMinutes(0);
+	mydate.setSeconds(0);
+	var gonelistarray = whoIsOut(mydate); 
+	updateInternalSite(gonelistarray , mydate);
+}
+
+function updateInternalSite(gonelistarray, thedate)
+{
+	if(gonelistarray.length==0||postExists(thedate))
+	{
+		//if nobody is out, or if the out list has already been posted, do not post
+		return false;
+	}
+  
+	gonelist = gonelistarray.join("<br/>");
+	var thedateshort = Utilities.formatDate(thedate,"GMT","M/d/yyyy");
+	var page = SitesApp.getPageByUrl(outpage);
+	
+	if (page == null)
+	{ 
+		return false;
+	}
+	else
+	{ 
+		var announcement = page.createAnnouncement("Who is Out: " + thedateshort, gonelist); 
+		MailApp.sendEmail(siteUpdateNotify, "Updated Who is Out Website", "Who is Out: " + thedateshort + " " + gonelist);
+	}
+}
+
+function postExists(thedate)
+{
+	var post = SitesApp.getPageByUrl(outpage + "who-is-out-" + Utilities.formatDate(thedate,"GMT","M-d-yyyy"));
+	if (post == null) 	//does not exist
+	{ 
+    return false;
+	}
+	else	//exists
+	{ 
+    return true;
+	}
+}
+
+
+
